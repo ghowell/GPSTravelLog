@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPS Travel Log</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.5.1/nouislider.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.5.1/nouislider.min.js"></script>
+</head>
+<body class="bg-gray-100">
+  <div class="container mx-auto p-4">
+    <center><h1 class="text-2xl font-bold mb-4">GPS Travel Log</h1></center>
+    <div id="filters" class="mb-4 p-4 bg-white rounded shadow">
+      <div id="year-filter" class="mb-4">
+        <label class="block text-sm font-medium text-gray-700">Year Range</label>
+        <div class="flex items-center space-x-4 pt-4">
+          <div id="year-slider" class="w-full mx-2"></div>
+        </div>
+      </div>
+      <div id="traveler-filter">
+        <label class="block text-sm font-medium text-gray-700">Travelers</label>
+        <div id="traveler-checkboxes" class="grid grid-cols-4 md:grid-cols-7 gap-2 mt-2">
+          <!-- Checkboxes will be inserted here -->
+        </div>
+      </div>
+    </div>
+    <div id="map" class="w-full h-[60vh] bg-gray-200 rounded"></div>
+  </div>
+  <script>
+'use strict';
+
+// Global state variables to be accessed by event listeners and map functions
+let map;
+let markers = [];
+let locations = {};
+let trips = [];
+let travelers = {};
+let minYear0 = null;
+let maxYear0 = null;
+
+window.initMap = async function () {
+  map = new google.maps.Map(document.getElementById('map'), {
+    center: { lat: 40, lng: -95 },
+    zoom: 4,
+    mapId: 'GPSTravelLog',
+  });
+
+  const parsedParams = parse(new URLSearchParams(window.location.search));
+
+  // set travelers
+  travelers = parsedParams.travelers;
+
+  // If title provided, update <h1> and <title>
+  if (parsedParams.title) {
+    document.title = parsedParams.title;
+    const h1 = document.querySelector('h1');
+    if (h1) h1.textContent = parsedParams.title;
+  }
+
+  // Store year bounds if provided
+  minYear0 = parsedParams.minYear0;
+  maxYear0 = parsedParams.maxYear0;
+
+  // Load data
+  const data = await loadData(parsedParams.dataURL, parsedParams.lineParser );
+
+  // Update global state
+  locations = data.locations;
+  trips = data.trips;
+
+  createFilters();
+  updateMap();
+};
+
+function parse(params) {
+  function gsheetURL(id) {
+    // 1c8PZbQIpf7VXaVaEiiLB_eECU2BkOerGyMfwMK4kfTo
+    // 1c8PZbQIpf7VXaVaEiiLB_eECU2BkOerGyMfwMK4kfTo GH's gps sheetID
+    return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
+  }
+
+  let dataURL = null;  // No default - require explicit sheet ID
+  let lineParser = null;
+  let parsedTravelers = {};
+  let title = null;
+  let parsedMinYear0 = null;
+  let parsedMaxYear0 = null;
+  
+  for (const [key, value] of params) {
+    switch (key) {
+      case 'id':
+        dataURL = gsheetURL(value);
+	lineParser = parseCSVLine;
+        break;
+
+      case 'path':
+        dataURL = value;
+	lineParser = line=>line.split('|');
+        break;
+
+      case 'title':
+        title = value;
+        break;
+
+      case 'minYear':
+        parsedMinYear0 = parseInt(value, 10);
+        if (isNaN(parsedMinYear0)) parsedMinYear0 = null;
+        break;
+
+      case 'maxYear':
+        parsedMaxYear0 = parseInt(value, 10);
+        if (isNaN(parsedMaxYear0)) parsedMaxYear0 = null;
+        break;
+
+      case 'travelers':
+        parsedTravelers = {}; // Clear defaults if URL param exists
+        for (const pair of value.split(',')) {
+          const parts = pair.split(':');
+          if (parts.length >= 2) {
+            let initial = parts[0].trim();
+            const name = parts[1].trim();
+            const isChecked = initial.endsWith('*');
+
+            if (isChecked) initial = initial.slice(0, -1); // Remove the *
+
+            // Check valid initial (1-2 chars)
+
+            if (
+              check(
+                initial && initial.length <= 2 && name,
+                `bad URL - travelers ${pair}`
+              )
+            ) {
+              parsedTravelers[initial] = {
+                // Use full initial (e.g. 'g' or 'gr') not just charAt(0)
+
+                name: name,
+
+                checked: isChecked,
+              };
+            }
+          }
+        }
+        break;
+
+      default:
+        check(false, `unrecognized option: ${key}`);
+        break;
+    }
+  }
+  check(Object.keys(parsedTravelers).length > 0, 'no travelers specified!');
+  check(dataURL, 'no gps data specified!');
+  return { dataURL, lineParser, travelers: parsedTravelers, title, minYear0: parsedMinYear0, maxYear0: parsedMaxYear0 };
+}
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++; // Skip escaped quote
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+async function loadData(dataURL,lineParser) {
+  let localLocations = {};
+  let localTrips = [];
+
+  console.log(`Fetching data from: ${dataURL}`);
+
+  try {
+    const response = await fetch(dataURL);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    const data = await response.text();
+
+    for (const line of data.split('\n')) {
+      if (line.trim()) {
+        // Remove empty trailing parts (handles trailing commas in CSV)
+        const parts = lineParser(line);
+        while (parts.length > 0 && parts[parts.length - 1] === '') {
+          parts.pop();
+        }
+
+        if (parts.length === 2) {
+          // Location: name, "lat,lng"
+          const [dest, coords] = parts;
+          const [lat, lng] = coords.split(',');
+          if (dest && lat && lng) {
+            localLocations[dest] = {
+              lat: parseFloat(lat),
+              lng: parseFloat(lng),
+            };
+          }
+        } else if (parts.length === 3) {
+          // Trip: date, initials, destinations
+          const [date, initials, dests] = parts;
+          if (!date || !initials || !dests) continue;
+          const year = parseInt(date.substring(0, 4), 10);
+          if (isNaN(year)) continue;
+
+          // Helper to get traveler name or fallback to initial
+          const getTravelerName = (i) => {
+            return travelers[i] ? travelers[i].name : i;
+          };
+
+          const tripTravelers = Array.from(initials)
+            .map((i) => getTravelerName(i))
+            .filter(Boolean);
+
+          const destArray = dests.split(' ').filter(Boolean);
+          for (const destination of destArray) {
+            localTrips.push({
+              date: date,
+              year: year,
+              initials: initials,
+              travelers: tripTravelers,
+              destination: destination,
+            });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error loading data:', e);
+    alert('Failed to load GPS data. See console for details.');
+  }
+  return { locations: localLocations, trips: localTrips };
+}
+
+function createFilters() {
+  if (trips.length === 0) {
+    console.warn('No trips loaded. Filters will not be initialized.');
+    return;
+  }
+
+  const years = [...new Set(trips.map((trip) => trip.year))].sort(
+    (a, b) => a - b
+  );
+  let minYear = years[0];
+  let maxYear = years[years.length - 1];
+
+  // Apply year bounds if provided
+  if (minYear0 !== null && minYear < minYear0) minYear = minYear0;
+  if (maxYear0 !== null && maxYear > maxYear0) maxYear = maxYear0;
+
+  const yearSlider = document.getElementById('year-slider');
+
+  // Destroy existing slider if it exists to allow re-initialization
+  if (yearSlider.noUiSlider) {
+    yearSlider.noUiSlider.destroy();
+  }
+
+  noUiSlider.create(yearSlider, {
+    start: [minYear, maxYear],
+    connect: true,
+    step: 1,
+    range: {
+      min: minYear,
+      max: maxYear,
+    },
+    tooltips: true,
+    format: {
+      to: (value) => Math.round(value),
+      from: (value) => Math.round(value),
+    },
+  });
+
+  yearSlider.noUiSlider.on('update', function () {
+    updateMap();
+  });
+
+  const travelerCheckboxes = document.getElementById('traveler-checkboxes');
+  travelerCheckboxes.innerHTML = '';
+
+  // If no travelers defined, maybe infer them from trips?
+  // For now, we iterate what we have.
+  for (const [initial, info] of Object.entries(travelers)) {
+    const checkboxDiv = document.createElement('div');
+    checkboxDiv.className = 'flex items-center';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = `traveler-${initial}`;
+    checkbox.value = info.name; // Value is the name
+    checkbox.checked = info.checked;
+    checkbox.className = 'h-4 w-4 text-indigo-600 border-gray-300 rounded';
+    checkbox.addEventListener('change', () => updateMap()); // Arrow function to ignore event arg
+
+    const label = document.createElement('label');
+    label.htmlFor = `traveler-${initial}`;
+    label.textContent = info.name;
+    label.className = 'ml-2 block text-sm text-gray-900';
+
+    checkboxDiv.appendChild(checkbox);
+    checkboxDiv.appendChild(label);
+    travelerCheckboxes.appendChild(checkboxDiv);
+  }
+}
+
+function updateMap() {
+  // Clear existing markers
+  for (const marker of markers) {
+    marker.setMap(null);
+  }
+  markers = [];
+
+  const yearSlider = document.getElementById('year-slider');
+  if (!yearSlider || !yearSlider.noUiSlider) return;
+
+  const [minYear, maxYear] = yearSlider.noUiSlider.get();
+
+  const selectedTravelers = [];
+  const checkboxes = document.querySelectorAll(
+    '#traveler-checkboxes input:checked'
+  );
+  checkboxes.forEach((checkbox) => {
+    selectedTravelers.push(checkbox.value);
+  });
+
+  const filteredTrips = trips.filter((trip) => {
+    const tripYear = trip.year;
+    const tripMatchesTravelers =
+      selectedTravelers.length === 0
+        ? false
+        : selectedTravelers.every((t) => trip.travelers.includes(t));
+
+    return tripYear >= minYear && tripYear <= maxYear && tripMatchesTravelers;
+  });
+
+  for (const trip of filteredTrips) {
+    const location = locations[trip.destination];
+    if (location) {
+      // Reconstruct initials for title based on who is actually defined in 'travelers'
+      const validInitials = Array.from(trip.initials)
+        .filter((i) => travelers.hasOwnProperty(i))
+        .join('');
+
+      const marker = new google.maps.Marker({
+        position: location,
+        map: map,
+        title: `${trip.date} ${validInitials}`,
+      });
+      markers.push(marker);
+    }
+  }
+}
+
+function check(isValid, message) {
+  let usage = `ERROR: ${message}
+Configure the map using URL parameters:
+* Google Sheet ID: Add ?id=YOUR_SHEET_ID (sheet must be published to web)
+* Travelers: Add ?travelers=initial:Name,initial:Name (use * for default checked, e.g. G*:Greg)
+* Title (optional): Add ?title=Your%20Title
+* Year bounds (optional): Add ?minYear=2020&maxYear=2024
+
+Google Sheet format:
+- Locations (2 columns): name, "lat,lng"
+- Trips (3 columns): date, initials, destinations
+
+Example URL:
+GPSTravelLog.html?id=1ABC123xyz&travelers=G*:Greg,N*:Nastya&title=Our%20Travels`;
+
+  if (!isValid) alert(usage);
+  return isValid;
+}
+  </script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBSV-1WUJrjTdy5tOs30yEIsCa2QPbqS58&callback=initMap" async defer></script>
+</body>
+</html>
