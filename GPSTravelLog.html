@@ -28,342 +28,299 @@
     <div id="map" class="w-full h-[60vh] bg-gray-200 rounded"></div>
   </div>
   <script>
-'use strict';
-
-// Global state variables to be accessed by event listeners and map functions
-let map;
-let markers = [];
-let locations = {};
-let trips = [];
-let travelers = {};
-let minYear0 = null;
-let maxYear0 = null;
-
-window.initMap = async function () {
-  map = new google.maps.Map(document.getElementById('map'), {
-    center: { lat: 40, lng: -95 },
-    zoom: 4,
-    mapId: 'GPSTravelLog',
-  });
-
-  const parsedParams = parse(new URLSearchParams(window.location.search));
-
-  // set travelers
-  travelers = parsedParams.travelers;
-
-  // If title provided, update <h1> and <title>
-  if (parsedParams.title) {
-    document.title = parsedParams.title;
-    const h1 = document.querySelector('h1');
-    if (h1) h1.textContent = parsedParams.title;
+"use strict";
+(() => {
+  // apps/TravelLog/TravelLogLib.ts
+  function parseCSVLine(line) {
+    const result = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === "," && !inQuotes) {
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result;
   }
-
-  // Store year bounds if provided
-  minYear0 = parsedParams.minYear0;
-  maxYear0 = parsedParams.maxYear0;
-
-  // Load data
-  const data = await loadData(parsedParams.dataURL, parsedParams.lineParser );
-
-  // Update global state
-  locations = data.locations;
-  trips = data.trips;
-
-  createFilters();
-  updateMap();
-};
-
-function parse(params) {
+  function parseTravelers(value) {
+    const travelers2 = {};
+    for (const pair of value.split(",")) {
+      const parts = pair.split(":");
+      if (parts.length >= 2) {
+        let initial = parts[0].trim();
+        const name = parts[1].trim();
+        const checked = initial.endsWith("*") || initial.endsWith("!");
+        const visible = !initial.endsWith("!");
+        if (checked)
+          initial = initial.slice(0, -1);
+        if (check(initial != null && initial.length > 0 && initial.length <= 2 && (name != null && name.length > 0), `bad URL - travelers ${pair}`))
+          travelers2[initial] = { name, checked, visible };
+      }
+    }
+    return Object.keys(travelers2).length > 0 ? travelers2 : null;
+  }
   function gsheetURL(id) {
-    // 1c8PZbQIpf7VXaVaEiiLB_eECU2BkOerGyMfwMK4kfTo
-    // 1c8PZbQIpf7VXaVaEiiLB_eECU2BkOerGyMfwMK4kfTo GH's gps sheetID
     return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
   }
+  function check(isValid, message) {
+    if (message != null)
+      return isValid;
+    return isValid;
+  }
 
-  let dataURL = null;  // No default - require explicit sheet ID
-  let lineParser = null;
-  let parsedTravelers = {};
-  let title = null;
-  let parsedMinYear0 = null;
-  let parsedMaxYear0 = null;
-  
-  for (const [key, value] of params) {
-    switch (key) {
-      case 'id':
-        dataURL = gsheetURL(value);
-	lineParser = parseCSVLine;
-        break;
-
-      case 'path':
-        dataURL = value;
-	lineParser = line=>line.split('|');
-        break;
-
-      case 'title':
-        title = value;
-        break;
-
-      case 'minYear':
-        parsedMinYear0 = parseInt(value, 10);
-        if (isNaN(parsedMinYear0)) parsedMinYear0 = null;
-        break;
-
-      case 'maxYear':
-        parsedMaxYear0 = parseInt(value, 10);
-        if (isNaN(parsedMaxYear0)) parsedMaxYear0 = null;
-        break;
-
-      case 'travelers':
-        parsedTravelers = {}; // Clear defaults if URL param exists
-        for (const pair of value.split(',')) {
-          const parts = pair.split(':');
-          if (parts.length >= 2) {
-            let initial = parts[0].trim();
-            const name = parts[1].trim();
-            const isChecked = initial.endsWith('*');
-
-            if (isChecked) initial = initial.slice(0, -1); // Remove the *
-
-            // Check valid initial (1-2 chars)
-
-            if (
-              check(
-                initial && initial.length <= 2 && name,
-                `bad URL - travelers ${pair}`
-              )
-            ) {
-              parsedTravelers[initial] = {
-                // Use full initial (e.g. 'g' or 'gr') not just charAt(0)
-
-                name: name,
-
-                checked: isChecked,
+  // apps/TravelLog/GPSTravelLog.ts
+  var map;
+  var markers = [];
+  var locations = {};
+  var trips = [];
+  var travelers = {};
+  var minYear0 = null;
+  var maxYear0 = null;
+  window.initMap = async function() {
+    const mapElement = document.getElementById("map");
+    if (!mapElement) {
+      console.error("Map element not found");
+      return;
+    }
+    map = new google.maps.Map(mapElement, {
+      center: { lat: 40, lng: -95 },
+      zoom: 4,
+      mapId: "GPSTravelLog"
+    });
+    const params = parse(new URLSearchParams(window.location.search));
+    minYear0 = params.minYear;
+    maxYear0 = params.maxYear;
+    if (params.travelers != null) {
+      travelers = params.travelers;
+      if (minYear0 && minYear0 == maxYear0) {
+        const yearFilter = document.getElementById("year-filter");
+        if (yearFilter)
+          yearFilter.style.display = "none";
+      }
+      if (!Object.values(travelers).some((traveler) => traveler.visible)) {
+        const travelerFilter = document.getElementById("traveler-filter");
+        if (travelerFilter)
+          travelerFilter.style.display = "none";
+      }
+    }
+    if (params.title) {
+      document.title = params.title;
+      const h1 = document.querySelector("h1");
+      if (h1)
+        h1.textContent = params.title;
+    }
+    if (params.dataURL && params.lineParser) {
+      const data = await loadData(params.dataURL, params.lineParser);
+      locations = data.locations;
+      trips = data.trips;
+      createFilters();
+      updateMap();
+    }
+  };
+  function parse(params) {
+    let dataURL = null;
+    let lineParser = null;
+    let travelers2 = {};
+    let title = null;
+    let minYear = null;
+    let maxYear = null;
+    for (const [key, value] of params) {
+      switch (key) {
+        case "id":
+          dataURL = gsheetURL(value);
+          lineParser = parseCSVLine;
+          break;
+        case "path":
+          dataURL = value;
+          lineParser = (line) => line.split("|");
+          break;
+        case "title":
+          title = value;
+          break;
+        case "minYear":
+          minYear = parseInt(value, 10);
+          if (isNaN(minYear))
+            minYear = null;
+          break;
+        case "maxYear":
+          maxYear = parseInt(value, 10);
+          if (isNaN(maxYear))
+            maxYear = null;
+          break;
+        case "travelers":
+          travelers2 = parseTravelers(value);
+          break;
+        default:
+          check2(false, `unrecognized option: ${key}`);
+          break;
+      }
+    }
+    check2(travelers2 != null && Object.keys(travelers2).length > 0, "no travelers specified!");
+    check2(dataURL, "no gps data specified!");
+    return { dataURL, lineParser, travelers: travelers2, title, minYear, maxYear };
+  }
+  async function loadData(dataURL, lineParser) {
+    const locations2 = {};
+    const trips2 = [];
+    console.log(`Fetching data from: ${dataURL}`);
+    try {
+      const response = await fetch(dataURL);
+      if (!response.ok)
+        throw new Error(`HTTP error! status: ${response.status}`);
+      const data = await response.text();
+      for (const line of data.split("\n")) {
+        if (line.trim()) {
+          const parts = lineParser(line);
+          while (parts.length > 0 && parts[parts.length - 1] === "") {
+            parts.pop();
+          }
+          if (parts.length === 2) {
+            const [dest, coords] = parts;
+            const [lat, lng] = coords.split(",");
+            if (dest && lat && lng) {
+              locations2[dest] = {
+                lat: parseFloat(lat),
+                lng: parseFloat(lng)
               };
+            }
+          } else if (parts.length === 3) {
+            const [date, initials, dests] = parts;
+            if (!date || !initials || !dests)
+              continue;
+            const year = parseInt(date.substring(0, 4), 10);
+            if (isNaN(year))
+              continue;
+            const getTravelerName = (i) => {
+              return travelers[i] ? travelers[i].name : i;
+            };
+            const tripTravelers = Array.from(initials).map((i) => getTravelerName(i)).filter(Boolean);
+            const destArray = dests.split(" ").filter(Boolean);
+            for (const destination of destArray) {
+              trips2.push({
+                date,
+                year,
+                initials,
+                travelers: tripTravelers,
+                destination
+              });
             }
           }
         }
-        break;
-
-      default:
-        check(false, `unrecognized option: ${key}`);
-        break;
-    }
-  }
-  check(Object.keys(parsedTravelers).length > 0, 'no travelers specified!');
-  check(dataURL, 'no gps data specified!');
-  return { dataURL, lineParser, travelers: parsedTravelers, title, minYear0: parsedMinYear0, maxYear0: parsedMaxYear0 };
-}
-
-function parseCSVLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++; // Skip escaped quote
-      } else {
-        inQuotes = !inQuotes;
       }
-    } else if (char === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
+    } catch (e) {
+      console.error("Error loading data:", e);
+      alert("Failed to load GPS data. See console for details.");
+    }
+    return { locations: locations2, trips: trips2 };
+  }
+  function createFilters() {
+    if (trips.length === 0) {
+      console.warn("No trips loaded. Filters will not be initialized.");
+      return;
+    }
+    const years = [...new Set(trips.map((trip) => trip.year))].sort(
+      (a, b) => a - b
+    );
+    let minYear = years[0];
+    let maxYear = years[years.length - 1];
+    if (minYear0 !== null && minYear < minYear0)
+      minYear = minYear0;
+    if (maxYear0 !== null && maxYear > maxYear0)
+      maxYear = maxYear0;
+    const yearSlider = document.getElementById("year-slider");
+    if (!yearSlider)
+      return;
+    if (yearSlider.noUiSlider) {
+      yearSlider.noUiSlider.destroy();
+    }
+    noUiSlider.create(yearSlider, {
+      start: [minYear, maxYear],
+      connect: true,
+      step: 1,
+      range: {
+        min: minYear,
+        max: maxYear
+      },
+      tooltips: true,
+      format: {
+        to: (value) => Math.round(value),
+        from: (value) => Math.round(value)
+      }
+    });
+    yearSlider.noUiSlider.on("update", function() {
+      updateMap();
+    });
+    const travelerCheckboxes = document.getElementById("traveler-checkboxes");
+    if (!travelerCheckboxes)
+      return;
+    travelerCheckboxes.innerHTML = "";
+    for (const [initial, info] of Object.entries(travelers)) {
+      const checkboxDiv = document.createElement("div");
+      checkboxDiv.className = "flex items-center";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.id = `traveler-${initial}`;
+      checkbox.value = info.name;
+      checkbox.checked = info.checked;
+      checkbox.className = "h-4 w-4 text-indigo-600 border-gray-300 rounded";
+      checkboxDiv.appendChild(checkbox);
+      const label = document.createElement("label");
+      checkbox.addEventListener("change", () => updateMap());
+      label.htmlFor = `traveler-${initial}`;
+      label.textContent = info.name;
+      label.className = "ml-2 block text-sm text-gray-900";
+      checkboxDiv.appendChild(label);
+      travelerCheckboxes.appendChild(checkboxDiv);
     }
   }
-  result.push(current.trim());
-  return result;
-}
-
-async function loadData(dataURL,lineParser) {
-  let localLocations = {};
-  let localTrips = [];
-
-  console.log(`Fetching data from: ${dataURL}`);
-
-  try {
-    const response = await fetch(dataURL);
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = await response.text();
-
-    for (const line of data.split('\n')) {
-      if (line.trim()) {
-        // Remove empty trailing parts (handles trailing commas in CSV)
-        const parts = lineParser(line);
-        while (parts.length > 0 && parts[parts.length - 1] === '') {
-          parts.pop();
-        }
-
-        if (parts.length === 2) {
-          // Location: name, "lat,lng"
-          const [dest, coords] = parts;
-          const [lat, lng] = coords.split(',');
-          if (dest && lat && lng) {
-            localLocations[dest] = {
-              lat: parseFloat(lat),
-              lng: parseFloat(lng),
-            };
-          }
-        } else if (parts.length === 3) {
-          // Trip: date, initials, destinations
-          const [date, initials, dests] = parts;
-          if (!date || !initials || !dests) continue;
-          const year = parseInt(date.substring(0, 4), 10);
-          if (isNaN(year)) continue;
-
-          // Helper to get traveler name or fallback to initial
-          const getTravelerName = (i) => {
-            return travelers[i] ? travelers[i].name : i;
-          };
-
-          const tripTravelers = Array.from(initials)
-            .map((i) => getTravelerName(i))
-            .filter(Boolean);
-
-          const destArray = dests.split(' ').filter(Boolean);
-          for (const destination of destArray) {
-            localTrips.push({
-              date: date,
-              year: year,
-              initials: initials,
-              travelers: tripTravelers,
-              destination: destination,
-            });
-          }
-        }
+  function updateMap() {
+    for (const marker of markers) {
+      marker.setMap(null);
+    }
+    markers = [];
+    const yearSlider = document.getElementById("year-slider");
+    if (!yearSlider || !yearSlider.noUiSlider)
+      return;
+    const [minYear, maxYear] = yearSlider.noUiSlider.get();
+    const selectedTravelers = [];
+    const checkboxes = document.querySelectorAll(
+      "#traveler-checkboxes input:checked"
+    );
+    checkboxes.forEach((checkbox) => {
+      selectedTravelers.push(checkbox.value);
+    });
+    const filteredTrips = trips.filter((trip) => {
+      const tripYear = trip.year;
+      const tripMatchesTravelers = selectedTravelers.length === 0 ? false : selectedTravelers.every((t) => trip.travelers.includes(t));
+      return tripYear >= minYear && tripYear <= maxYear && tripMatchesTravelers;
+    });
+    for (const trip of filteredTrips) {
+      const location = locations[trip.destination];
+      if (location) {
+        const validInitials = Array.from(trip.initials).filter((i) => Object.prototype.hasOwnProperty.call(travelers, i)).join("");
+        const marker = new google.maps.Marker({
+          position: location,
+          map,
+          title: `${trip.date} ${validInitials}`
+        });
+        markers.push(marker);
       }
     }
-  } catch (e) {
-    console.error('Error loading data:', e);
-    alert('Failed to load GPS data. See console for details.');
   }
-  return { locations: localLocations, trips: localTrips };
-}
-
-function createFilters() {
-  if (trips.length === 0) {
-    console.warn('No trips loaded. Filters will not be initialized.');
-    return;
-  }
-
-  const years = [...new Set(trips.map((trip) => trip.year))].sort(
-    (a, b) => a - b
-  );
-  let minYear = years[0];
-  let maxYear = years[years.length - 1];
-
-  // Apply year bounds if provided
-  if (minYear0 !== null && minYear < minYear0) minYear = minYear0;
-  if (maxYear0 !== null && maxYear > maxYear0) maxYear = maxYear0;
-
-  const yearSlider = document.getElementById('year-slider');
-
-  // Destroy existing slider if it exists to allow re-initialization
-  if (yearSlider.noUiSlider) {
-    yearSlider.noUiSlider.destroy();
-  }
-
-  noUiSlider.create(yearSlider, {
-    start: [minYear, maxYear],
-    connect: true,
-    step: 1,
-    range: {
-      min: minYear,
-      max: maxYear,
-    },
-    tooltips: true,
-    format: {
-      to: (value) => Math.round(value),
-      from: (value) => Math.round(value),
-    },
-  });
-
-  yearSlider.noUiSlider.on('update', function () {
-    updateMap();
-  });
-
-  const travelerCheckboxes = document.getElementById('traveler-checkboxes');
-  travelerCheckboxes.innerHTML = '';
-
-  // If no travelers defined, maybe infer them from trips?
-  // For now, we iterate what we have.
-  for (const [initial, info] of Object.entries(travelers)) {
-    const checkboxDiv = document.createElement('div');
-    checkboxDiv.className = 'flex items-center';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.id = `traveler-${initial}`;
-    checkbox.value = info.name; // Value is the name
-    checkbox.checked = info.checked;
-    checkbox.className = 'h-4 w-4 text-indigo-600 border-gray-300 rounded';
-    checkbox.addEventListener('change', () => updateMap()); // Arrow function to ignore event arg
-
-    const label = document.createElement('label');
-    label.htmlFor = `traveler-${initial}`;
-    label.textContent = info.name;
-    label.className = 'ml-2 block text-sm text-gray-900';
-
-    checkboxDiv.appendChild(checkbox);
-    checkboxDiv.appendChild(label);
-    travelerCheckboxes.appendChild(checkboxDiv);
-  }
-}
-
-function updateMap() {
-  // Clear existing markers
-  for (const marker of markers) {
-    marker.setMap(null);
-  }
-  markers = [];
-
-  const yearSlider = document.getElementById('year-slider');
-  if (!yearSlider || !yearSlider.noUiSlider) return;
-
-  const [minYear, maxYear] = yearSlider.noUiSlider.get();
-
-  const selectedTravelers = [];
-  const checkboxes = document.querySelectorAll(
-    '#traveler-checkboxes input:checked'
-  );
-  checkboxes.forEach((checkbox) => {
-    selectedTravelers.push(checkbox.value);
-  });
-
-  const filteredTrips = trips.filter((trip) => {
-    const tripYear = trip.year;
-    const tripMatchesTravelers =
-      selectedTravelers.length === 0
-        ? false
-        : selectedTravelers.every((t) => trip.travelers.includes(t));
-
-    return tripYear >= minYear && tripYear <= maxYear && tripMatchesTravelers;
-  });
-
-  for (const trip of filteredTrips) {
-    const location = locations[trip.destination];
-    if (location) {
-      // Reconstruct initials for title based on who is actually defined in 'travelers'
-      const validInitials = Array.from(trip.initials)
-        .filter((i) => travelers.hasOwnProperty(i))
-        .join('');
-
-      const marker = new google.maps.Marker({
-        position: location,
-        map: map,
-        title: `${trip.date} ${validInitials}`,
-      });
-      markers.push(marker);
-    }
-  }
-}
-
-function check(isValid, message) {
-  let usage = `ERROR: ${message}
+  function check2(isValid, message) {
+    const usage = `ERROR: ${message}
 Configure the map using URL parameters:
 * Google Sheet ID: Add ?id=YOUR_SHEET_ID (sheet must be published to web)
 * Travelers: Add ?travelers=initial:Name,initial:Name (use * for default checked, e.g. G*:Greg)
@@ -376,10 +333,12 @@ Google Sheet format:
 
 Example URL:
 GPSTravelLog.html?id=1ABC123xyz&travelers=G*:Greg,N*:Nastya&title=Our%20Travels`;
-
-  if (!isValid) alert(usage);
-  return isValid;
-}
+    if (!isValid)
+      alert(usage);
+    return !!isValid;
+  }
+})();
+//# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsiVHJhdmVsTG9nTGliLnRzIiwgIkdQU1RyYXZlbExvZy50cyJdLAogICJtYXBwaW5ncyI6ICI7OztBQTBCTyxXQUFTLGFBQWEsTUFBd0I7QUFDbkQsVUFBTSxTQUFtQixDQUFDO0FBQzFCLFFBQUksVUFBVTtBQUNkLFFBQUksV0FBVztBQUVmLGFBQVMsSUFBSSxHQUFHLElBQUksS0FBSyxRQUFRLEtBQUs7QUFDcEMsWUFBTSxPQUFPLEtBQUssQ0FBQztBQUNuQixVQUFJLFNBQVMsS0FBSztBQUNoQixZQUFJLFlBQVksS0FBSyxJQUFJLENBQUMsTUFBTSxLQUFLO0FBQ25DLHFCQUFXO0FBQ1g7QUFBQSxRQUNGLE9BQU87QUFDTCxxQkFBVyxDQUFDO0FBQUEsUUFDZDtBQUFBLE1BQ0YsV0FBVyxTQUFTLE9BQU8sQ0FBQyxVQUFVO0FBQ3BDLGVBQU8sS0FBSyxRQUFRLEtBQUssQ0FBQztBQUMxQixrQkFBVTtBQUFBLE1BQ1osT0FBTztBQUNMLG1CQUFXO0FBQUEsTUFDYjtBQUFBLElBQ0Y7QUFDQSxXQUFPLEtBQUssUUFBUSxLQUFLLENBQUM7QUFDMUIsV0FBTztBQUFBLEVBQ1Q7QUFPTyxXQUFTLGVBQWUsT0FBb0Q7QUFDakYsVUFBTUEsYUFBMEMsQ0FBQztBQUVqRCxlQUFXLFFBQVEsTUFBTSxNQUFNLEdBQUcsR0FBRztBQUNuQyxZQUFNLFFBQVEsS0FBSyxNQUFNLEdBQUc7QUFDNUIsVUFBSSxNQUFNLFVBQVUsR0FBRztBQUNyQixZQUFJLFVBQVUsTUFBTSxDQUFDLEVBQUUsS0FBSztBQUM1QixjQUFNLE9BQU8sTUFBTSxDQUFDLEVBQUUsS0FBSztBQUMzQixjQUFNLFVBQVUsUUFBUSxTQUFTLEdBQUcsS0FBSyxRQUFRLFNBQVMsR0FBRztBQUM3RCxjQUFNLFVBQVUsQ0FBQyxRQUFRLFNBQVMsR0FBRztBQUVyQyxZQUFJO0FBQ1Qsb0JBQVUsUUFBUSxNQUFNLEdBQUcsRUFBRTtBQUV4QixZQUFLLE1BQU8sV0FBUyxRQUFRLFFBQVEsU0FBTyxLQUFPLFFBQVEsVUFBVSxNQUFPLFFBQVEsUUFBUSxLQUFLLFNBQU8sSUFBSSx1QkFBdUIsSUFBSSxFQUFFO0FBQ3ZJLFVBQUFBLFdBQVUsT0FBTyxJQUFJLEVBQUUsTUFBTSxTQUFTLFFBQVE7QUFBQSxNQUNsRDtBQUFBLElBQ0Y7QUFDQSxXQUFPLE9BQU8sS0FBS0EsVUFBUyxFQUFFLFNBQVMsSUFBSUEsYUFBWTtBQUFBLEVBQ3pEO0FBMkRPLFdBQVMsVUFBVSxJQUFvQjtBQUM1QyxXQUFPLDBDQUEwQyxFQUFFO0FBQUEsRUFDckQ7QUFFQSxXQUFTLE1BQU0sU0FBa0IsU0FBMEI7QUFDekQsUUFBSyxXQUFXO0FBQ2QsYUFBTztBQUNULFdBQU87QUFBQSxFQUNUOzs7QUN6RkEsTUFBSTtBQUNKLE1BQUksVUFBZ0MsQ0FBQztBQUNyQyxNQUFJLFlBQXlDLENBQUM7QUFDOUMsTUFBSSxRQUFnQixDQUFDO0FBQ3JCLE1BQUksWUFBMEMsQ0FBQztBQUMvQyxNQUFJLFdBQTBCO0FBQzlCLE1BQUksV0FBMEI7QUFFOUIsU0FBTyxVQUFVLGlCQUFrQjtBQUNqQyxVQUFNLGFBQWEsU0FBUyxlQUFlLEtBQUs7QUFDaEQsUUFBSSxDQUFDLFlBQVk7QUFDZixjQUFRLE1BQU0sdUJBQXVCO0FBQ3JDO0FBQUEsSUFDRjtBQUVBLFVBQU0sSUFBSSxPQUFPLEtBQUssSUFBSSxZQUFZO0FBQUEsTUFDcEMsUUFBUSxFQUFFLEtBQUssSUFBSSxLQUFLLElBQUk7QUFBQSxNQUM1QixNQUFNO0FBQUEsTUFDTixPQUFPO0FBQUEsSUFDVCxDQUFDO0FBRUQsVUFBTSxTQUFTLE1BQU0sSUFBSSxnQkFBZ0IsT0FBTyxTQUFTLE1BQU0sQ0FBQztBQUdoRSxlQUFXLE9BQU87QUFDbEIsZUFBVyxPQUFPO0FBR2xCLFFBQUssT0FBTyxhQUFhLE1BQU87QUFDOUIsa0JBQVksT0FBTztBQUVuQixVQUFLLFlBQVksWUFBWSxVQUFXO0FBQ3RDLGNBQU0sYUFBYSxTQUFTLGVBQWUsYUFBYTtBQUN4RCxZQUFLO0FBQ1YscUJBQVcsTUFBTSxVQUFVO0FBQUEsTUFDeEI7QUFFQSxVQUFLLENBQUMsT0FBTyxPQUFPLFNBQVMsRUFBRSxLQUFLLGNBQVksU0FBUyxPQUFPLEdBQUk7QUFDbEUsY0FBTSxpQkFBaUIsU0FBUyxlQUFlLGlCQUFpQjtBQUNoRSxZQUFLO0FBQ1YseUJBQWUsTUFBTSxVQUFVO0FBQUEsTUFDNUI7QUFBQSxJQUNGO0FBR0EsUUFBSSxPQUFPLE9BQU87QUFDaEIsZUFBUyxRQUFRLE9BQU87QUFDeEIsWUFBTSxLQUFLLFNBQVMsY0FBYyxJQUFJO0FBQ3RDLFVBQUk7QUFBSSxXQUFHLGNBQWMsT0FBTztBQUFBLElBQ2xDO0FBR0EsUUFBSSxPQUFPLFdBQVcsT0FBTyxZQUFZO0FBQ3ZDLFlBQU0sT0FBTyxNQUFNLFNBQVMsT0FBTyxTQUFTLE9BQU8sVUFBVTtBQUc3RCxrQkFBWSxLQUFLO0FBQ2pCLGNBQVEsS0FBSztBQUViLG9CQUFjO0FBQ2QsZ0JBQVU7QUFBQSxJQUNaO0FBQUEsRUFDRjtBQUVBLFdBQVMsTUFBTSxRQUFpQztBQUc5QyxRQUFJLFVBQXlCO0FBQzdCLFFBQUksYUFBa0Q7QUFDdEQsUUFBSUMsYUFBaUQsQ0FBQztBQUN0RCxRQUFJLFFBQXVCO0FBQzNCLFFBQUksVUFBeUI7QUFDN0IsUUFBSSxVQUF5QjtBQUU3QixlQUFXLENBQUMsS0FBSyxLQUFLLEtBQUssUUFBUTtBQUNqQyxjQUFRLEtBQUs7QUFBQSxRQUNYLEtBQUs7QUFDSCxvQkFBVSxVQUFVLEtBQUs7QUFDekIsdUJBQWE7QUFDYjtBQUFBLFFBRUYsS0FBSztBQUNILG9CQUFVO0FBQ1YsdUJBQWEsQ0FBQyxTQUFpQixLQUFLLE1BQU0sR0FBRztBQUM3QztBQUFBLFFBRUYsS0FBSztBQUNILGtCQUFRO0FBQ1I7QUFBQSxRQUVGLEtBQUs7QUFDSCxvQkFBVSxTQUFTLE9BQU8sRUFBRTtBQUM1QixjQUFJLE1BQU0sT0FBTztBQUFHLHNCQUFVO0FBQzlCO0FBQUEsUUFFRixLQUFLO0FBQ0gsb0JBQVUsU0FBUyxPQUFPLEVBQUU7QUFDNUIsY0FBSSxNQUFNLE9BQU87QUFBRyxzQkFBVTtBQUM5QjtBQUFBLFFBRUYsS0FBSztBQUNILFVBQUFBLGFBQVksZUFBZ0IsS0FBTTtBQUNsQztBQUFBLFFBRUY7QUFDRSxVQUFBQyxPQUFNLE9BQU8sd0JBQXdCLEdBQUcsRUFBRTtBQUMxQztBQUFBLE1BQ0o7QUFBQSxJQUNGO0FBQ0EsSUFBQUEsT0FBTUQsY0FBYSxRQUFRLE9BQU8sS0FBS0EsVUFBUyxFQUFFLFNBQVMsR0FBRyx5QkFBeUI7QUFDdkYsSUFBQUMsT0FBTSxTQUFTLHdCQUF3QjtBQUN2QyxXQUFPLEVBQUUsU0FBUyxZQUFZLFdBQUFELFlBQVcsT0FBTyxTQUFTLFFBQVE7QUFBQSxFQUNuRTtBQUlBLGlCQUFlLFNBQVUsU0FBaUIsWUFFMUM7QUFDRSxVQUFNRSxhQUF5QyxDQUFDO0FBQ2hELFVBQU1DLFNBQWdCLENBQUM7QUFFdkIsWUFBUSxJQUFJLHVCQUF1QixPQUFPLEVBQUU7QUFFNUMsUUFBSTtBQUNGLFlBQU0sV0FBVyxNQUFNLE1BQU0sT0FBTztBQUNwQyxVQUFJLENBQUMsU0FBUztBQUFJLGNBQU0sSUFBSSxNQUFNLHVCQUF1QixTQUFTLE1BQU0sRUFBRTtBQUMxRSxZQUFNLE9BQU8sTUFBTSxTQUFTLEtBQUs7QUFFakMsaUJBQVcsUUFBUSxLQUFLLE1BQU0sSUFBSSxHQUFHO0FBQ25DLFlBQUksS0FBSyxLQUFLLEdBQUc7QUFDZixnQkFBTSxRQUFRLFdBQVcsSUFBSTtBQUM3QixpQkFBTyxNQUFNLFNBQVMsS0FBSyxNQUFNLE1BQU0sU0FBUyxDQUFDLE1BQU0sSUFBSTtBQUN6RCxrQkFBTSxJQUFJO0FBQUEsVUFDWjtBQUVBLGNBQUksTUFBTSxXQUFXLEdBQUc7QUFDdEIsa0JBQU0sQ0FBQyxNQUFNLE1BQU0sSUFBSTtBQUN2QixrQkFBTSxDQUFDLEtBQUssR0FBRyxJQUFJLE9BQU8sTUFBTSxHQUFHO0FBQ25DLGdCQUFJLFFBQVEsT0FBTyxLQUFLO0FBQ3RCLGNBQUFELFdBQVUsSUFBSSxJQUFJO0FBQUEsZ0JBQ2hCLEtBQUssV0FBVyxHQUFHO0FBQUEsZ0JBQ25CLEtBQUssV0FBVyxHQUFHO0FBQUEsY0FDckI7QUFBQSxZQUNGO0FBQUEsVUFDRixXQUFXLE1BQU0sV0FBVyxHQUFHO0FBQzdCLGtCQUFNLENBQUMsTUFBTSxVQUFVLEtBQUssSUFBSTtBQUNoQyxnQkFBSSxDQUFDLFFBQVEsQ0FBQyxZQUFZLENBQUM7QUFBTztBQUNsQyxrQkFBTSxPQUFPLFNBQVMsS0FBSyxVQUFVLEdBQUcsQ0FBQyxHQUFHLEVBQUU7QUFDOUMsZ0JBQUksTUFBTSxJQUFJO0FBQUc7QUFFakIsa0JBQU0sa0JBQWtCLENBQUMsTUFBc0I7QUFDN0MscUJBQU8sVUFBVSxDQUFDLElBQUksVUFBVSxDQUFDLEVBQUUsT0FBTztBQUFBLFlBQzVDO0FBRUEsa0JBQU0sZ0JBQWdCLE1BQU0sS0FBSyxRQUFRLEVBQ3RDLElBQUksQ0FBQyxNQUFNLGdCQUFnQixDQUFDLENBQUMsRUFDN0IsT0FBTyxPQUFPO0FBRWpCLGtCQUFNLFlBQVksTUFBTSxNQUFNLEdBQUcsRUFBRSxPQUFPLE9BQU87QUFDakQsdUJBQVcsZUFBZSxXQUFXO0FBQ25DLGNBQUFDLE9BQU0sS0FBSztBQUFBLGdCQUNUO0FBQUEsZ0JBQ0E7QUFBQSxnQkFDQTtBQUFBLGdCQUNBLFdBQVc7QUFBQSxnQkFDWDtBQUFBLGNBQ0YsQ0FBQztBQUFBLFlBQ0g7QUFBQSxVQUNGO0FBQUEsUUFDRjtBQUFBLE1BQ0Y7QUFBQSxJQUNGLFNBQVMsR0FBRztBQUNWLGNBQVEsTUFBTSx1QkFBdUIsQ0FBQztBQUN0QyxZQUFNLG1EQUFtRDtBQUFBLElBQzNEO0FBQ0EsV0FBTyxFQUFFLFdBQUFELFlBQVcsT0FBQUMsT0FBTTtBQUFBLEVBQzVCO0FBRUEsV0FBUyxnQkFBc0I7QUFDN0IsUUFBSSxNQUFNLFdBQVcsR0FBRztBQUN0QixjQUFRLEtBQUssbURBQW1EO0FBQ2hFO0FBQUEsSUFDRjtBQUVBLFVBQU0sUUFBUSxDQUFDLEdBQUcsSUFBSSxJQUFJLE1BQU0sSUFBSSxDQUFDLFNBQVMsS0FBSyxJQUFJLENBQUMsQ0FBQyxFQUFFO0FBQUEsTUFDekQsQ0FBQyxHQUFHLE1BQU0sSUFBSTtBQUFBLElBQ2hCO0FBQ0EsUUFBSSxVQUFVLE1BQU0sQ0FBQztBQUNyQixRQUFJLFVBQVUsTUFBTSxNQUFNLFNBQVMsQ0FBQztBQUVwQyxRQUFJLGFBQWEsUUFBUSxVQUFVO0FBQVUsZ0JBQVU7QUFDdkQsUUFBSSxhQUFhLFFBQVEsVUFBVTtBQUFVLGdCQUFVO0FBRXZELFVBQU0sYUFBYSxTQUFTLGVBQWUsYUFBYTtBQUN4RCxRQUFJLENBQUM7QUFBWTtBQUVqQixRQUFJLFdBQVcsWUFBWTtBQUN6QixpQkFBVyxXQUFXLFFBQVE7QUFBQSxJQUNoQztBQUVBLGVBQVcsT0FBTyxZQUFZO0FBQUEsTUFDNUIsT0FBTyxDQUFDLFNBQVMsT0FBTztBQUFBLE1BQ3hCLFNBQVM7QUFBQSxNQUNULE1BQU07QUFBQSxNQUNOLE9BQU87QUFBQSxRQUNMLEtBQUs7QUFBQSxRQUNMLEtBQUs7QUFBQSxNQUNQO0FBQUEsTUFDQSxVQUFVO0FBQUEsTUFDVixRQUFRO0FBQUEsUUFDTixJQUFJLENBQUMsVUFBa0IsS0FBSyxNQUFNLEtBQUs7QUFBQSxRQUN2QyxNQUFNLENBQUMsVUFBa0IsS0FBSyxNQUFNLEtBQUs7QUFBQSxNQUMzQztBQUFBLElBQ0YsQ0FBQztBQUNELGVBQVcsV0FBWSxHQUFHLFVBQVUsV0FBWTtBQUM5QyxnQkFBVTtBQUFBLElBQ1osQ0FBQztBQUVELFVBQU0scUJBQXFCLFNBQVMsZUFBZSxxQkFBcUI7QUFDeEUsUUFBSSxDQUFDO0FBQW9CO0FBRXpCLHVCQUFtQixZQUFZO0FBRS9CLGVBQVcsQ0FBQyxTQUFTLElBQUksS0FBSyxPQUFPLFFBQVEsU0FBUyxHQUFHO0FBQ3ZELFlBQU0sY0FBYyxTQUFTLGNBQWMsS0FBSztBQUNoRCxrQkFBWSxZQUFZO0FBRXhCLFlBQU0sV0FBVyxTQUFTLGNBQWMsT0FBTztBQUMvQyxlQUFTLE9BQU87QUFDaEIsZUFBUyxLQUFLLFlBQVksT0FBTztBQUNqQyxlQUFTLFFBQVEsS0FBSztBQUN0QixlQUFTLFVBQVUsS0FBSztBQUN4QixlQUFTLFlBQVk7QUFFckIsa0JBQVksWUFBWSxRQUFRO0FBRWhDLFlBQU0sUUFBUSxTQUFTLGNBQWMsT0FBTztBQUU1QyxlQUFTLGlCQUFpQixVQUFVLE1BQU0sVUFBVSxDQUFDO0FBQ3JELFlBQU0sVUFBVSxZQUFZLE9BQU87QUFDbkMsWUFBTSxjQUFjLEtBQUs7QUFDekIsWUFBTSxZQUFZO0FBQ2xCLGtCQUFZLFlBQVksS0FBSztBQUM3Qix5QkFBbUIsWUFBWSxXQUFXO0FBQUEsSUFDNUM7QUFBQSxFQUNGO0FBRUEsV0FBUyxZQUFrQjtBQUN6QixlQUFXLFVBQVUsU0FBUztBQUM1QixhQUFPLE9BQU8sSUFBSTtBQUFBLElBQ3BCO0FBQ0EsY0FBVSxDQUFDO0FBRVgsVUFBTSxhQUFhLFNBQVMsZUFBZSxhQUFhO0FBQ3hELFFBQUksQ0FBQyxjQUFjLENBQUMsV0FBVztBQUM3QjtBQUVGLFVBQU0sQ0FBQyxTQUFTLE9BQU8sSUFBSSxXQUFXLFdBQVcsSUFBSTtBQUNyRCxVQUFNLG9CQUE4QixDQUFDO0FBQ3JDLFVBQU0sYUFBYSxTQUFTO0FBQUEsTUFDMUI7QUFBQSxJQUNGO0FBQ0EsZUFBVyxRQUFRLENBQUMsYUFBYTtBQUMvQix3QkFBa0IsS0FBSyxTQUFTLEtBQUs7QUFBQSxJQUN2QyxDQUFDO0FBRUQsVUFBTSxnQkFBZ0IsTUFBTSxPQUFPLENBQUMsU0FBUztBQUMzQyxZQUFNLFdBQVcsS0FBSztBQUN0QixZQUFNLHVCQUNKLGtCQUFrQixXQUFXLElBQ3pCLFFBQ0Esa0JBQWtCLE1BQU0sQ0FBQyxNQUFNLEtBQUssVUFBVSxTQUFTLENBQUMsQ0FBQztBQUUvRCxhQUFPLFlBQVksV0FBVyxZQUFZLFdBQVc7QUFBQSxJQUN2RCxDQUFDO0FBRUQsZUFBVyxRQUFRLGVBQWU7QUFDaEMsWUFBTSxXQUFXLFVBQVUsS0FBSyxXQUFXO0FBQzNDLFVBQUksVUFBVTtBQUNaLGNBQU0sZ0JBQWdCLE1BQU0sS0FBSyxLQUFLLFFBQVEsRUFDM0MsT0FBTyxDQUFDLE1BQU0sT0FBTyxVQUFVLGVBQWUsS0FBSyxXQUFXLENBQUMsQ0FBQyxFQUNoRSxLQUFLLEVBQUU7QUFFVixjQUFNLFNBQVMsSUFBSSxPQUFPLEtBQUssT0FBTztBQUFBLFVBQ3BDLFVBQVU7QUFBQSxVQUNWO0FBQUEsVUFDQSxPQUFPLEdBQUcsS0FBSyxJQUFJLElBQUksYUFBYTtBQUFBLFFBQ3RDLENBQUM7QUFDRCxnQkFBUSxLQUFLLE1BQU07QUFBQSxNQUNyQjtBQUFBLElBQ0Y7QUFBQSxFQUNGO0FBRU8sV0FBU0YsT0FBTSxTQUFrQixTQUEwQjtBQUNoRSxVQUFNLFFBQVEsVUFBVSxPQUFPO0FBQUE7QUFBQTtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBYy9CLFFBQUksQ0FBQztBQUFTLFlBQU0sS0FBSztBQUN6QixXQUFPLENBQUMsQ0FBQztBQUFBLEVBQ1g7IiwKICAibmFtZXMiOiBbInRyYXZlbGVycyIsICJ0cmF2ZWxlcnMiLCAiY2hlY2siLCAibG9jYXRpb25zIiwgInRyaXBzIl0KfQo=
   </script>
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBSV-1WUJrjTdy5tOs30yEIsCa2QPbqS58&callback=initMap" async defer></script>
 </body>
