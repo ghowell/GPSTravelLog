@@ -28,7 +28,151 @@
     <div id="map" class="w-full h-[60vh] bg-gray-200 rounded"></div>
   </div>
   <script>
-"use strict";(()=>{function h(i){let e=[],a="",t=!1;for(let o=0;o<i.length;o++){let n=i[o];n==='"'?t&&i[o+1]==='"'?(a+='"',o++):t=!t:n===","&&!t?(e.push(a.trim()),a=""):a+=n}return e.push(a.trim()),e}function k(i){let e={};for(let a of i.split(",")){let t=a.split(":"),o=!1;if(t.length>=2){let n=t[0].trim(),s=t[1].trim(),r=n.endsWith("*")||n.endsWith("!"),l=!n.endsWith("!");(r||n.length==1)&&(r&&(n=n.slice(0,-1)),n.length==1&&s.length>0&&(e[n]={name:s,checked:r,visible:l},o=!0))}u(o,`ERROR: badly formatted traveler ${a}`)}return e}function x(i){if(i.length!==2)return null;let[e,a]=i,t=a.split(",");if(t.length!==2)return null;let o=parseFloat(t[0]),n=parseFloat(t[1]);return!e||isNaN(o)||isNaN(n)?null:{dest:e,location:{lat:o,lng:n}}}function R(i,e){if(i.length!==3)return null;let[a,t,o]=i;if(!a||!t||!o)return null;let n=Number(a.substring(0,4));if(isNaN(n))return null;let s=d=>e[d]?e[d].name:d,r=Array.from(t).map(d=>s(d)).filter(Boolean),l=o.split(" ").filter(Boolean),c=[];for(let d of l)c.push({date:a,year:n,initials:t,travelers:r,destination:d});return c.length>0?c:null}function T(i){return`https://docs.google.com/spreadsheets/d/${i}/export?format=csv`}var m=[];function u(i,e){return i||m.push(e),i}var S,b=[],L={},g=[],p={};window.initMap=async function(){let i=document.getElementById("map");if(!i){console.error("Map element not found");return}S=new google.maps.Map(i,{center:{lat:40,lng:-95},zoom:4,mapId:"GPSTravelLog"});let e=E(new URLSearchParams(window.location.search)),a=0;if(e.slider||(v("year-filter"),++a),(p=e.travelers)!=null&&Object.values(p).every(t=>!t.visible)&&(++a,v("traveler-filter")),a==2&&v("filters"),e.title){document.title=e.title;let t=document.querySelector("h1");t&&(t.textContent=e.title)}if(e.dataURL&&e.lineParser){let t=await N(e.dataURL,e.lineParser);L=t.locations,g=t.trips,U(e.minYear,e.maxYear),y()}if(m.length){let t=`FOUND ${m.length} errors!
+"use strict";
+(() => {
+  // apps/TravelLog/TravelLogLib.ts
+  function parseCSVLine(line) {
+    const result = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === "," && !inQuotes) {
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  }
+  function parseTravelers(value) {
+    const travelers2 = {};
+    for (const pair of value.split(",")) {
+      const parts = pair.split(":");
+      let succeeded = false;
+      if (parts.length >= 2) {
+        let initial = parts[0].trim();
+        const name = parts[1].trim();
+        const checked = initial.endsWith("*") || initial.endsWith("!");
+        const visible = !initial.endsWith("!");
+        if (checked || initial.length == 1) {
+          if (checked)
+            initial = initial.slice(0, -1);
+          if (initial.length == 1 && name.length > 0) {
+            travelers2[initial] = { name, checked, visible };
+            succeeded = true;
+          }
+        }
+      }
+      check(succeeded, `ERROR: badly formatted traveler ${pair}`);
+    }
+    return travelers2;
+  }
+  function parseLocationLine(parts) {
+    if (parts.length !== 2)
+      return null;
+    const [dest, coords] = parts;
+    const coordParts = coords.split(",");
+    if (coordParts.length !== 2)
+      return null;
+    const lat = parseFloat(coordParts[0]);
+    const lng = parseFloat(coordParts[1]);
+    if (!dest || isNaN(lat) || isNaN(lng))
+      return null;
+    return { dest, location: { lat, lng } };
+  }
+  function parseTripLine(parts, travelers2) {
+    if (parts.length !== 3)
+      return null;
+    const [date, initials, dests] = parts;
+    if (!date || !initials || !dests)
+      return null;
+    const year = Number(date.substring(0, 4));
+    if (isNaN(year))
+      return null;
+    const getTravelerName = (i) => {
+      return travelers2[i] ? travelers2[i].name : i;
+    };
+    const tripTravelers = Array.from(initials).map((i) => getTravelerName(i)).filter(Boolean);
+    const destArray = dests.split(" ").filter(Boolean);
+    const trips2 = [];
+    for (const destination of destArray) {
+      trips2.push({
+        date,
+        year,
+        initials,
+        travelers: tripTravelers,
+        destination
+      });
+    }
+    return trips2.length > 0 ? trips2 : null;
+  }
+  function gsheetURL(id) {
+    return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
+  }
+  function gtxtURL(id) {
+    return `https://drive.google.com/uc?export=download&id=${id}`;
+  }
+  var errors = [];
+  function check(isValid, message) {
+    if (!isValid)
+      errors.push(message);
+    return isValid;
+  }
+
+  // apps/TravelLog/GPSTravelLog.ts
+  var map;
+  var markers = [];
+  var locations = {};
+  var trips = [];
+  var travelers = {};
+  window.initMap = async function() {
+    const mapElement = document.getElementById("map");
+    if (!mapElement) {
+      console.error("Map element not found");
+      return;
+    }
+    map = new google.maps.Map(mapElement, {
+      center: { lat: 40, lng: -95 },
+      zoom: 4,
+      mapId: "GPSTravelLog"
+    });
+    const params = parse(new URLSearchParams(window.location.search));
+    let hidden = 0;
+    if (!params.slider) {
+      hide("year-filter");
+      ++hidden;
+    }
+    if ((travelers = params.travelers) != null && Object.values(travelers).every((t) => !t.visible)) {
+      ++hidden;
+      hide("traveler-filter");
+    }
+    if (hidden == 2)
+      hide("filters");
+    if (params.title) {
+      document.title = params.title;
+      const h1 = document.querySelector("h1");
+      if (h1)
+        h1.textContent = params.title;
+    }
+    if (params.dataURL && params.lineParser) {
+      const data = await loadData(params.dataURL, params.lineParser);
+      locations = data.locations;
+      trips = data.trips;
+      createFilters(params.minYear, params.maxYear);
+      updateMap();
+    }
+    if (errors.length) {
+      const USAGE = `FOUND ${errors.length} errors!
 Configure the map using URL parameters:
 * Google Sheet ID: Add ?id=YOUR_SHEET_ID (sheet must be published to web)
 * Travelers: Add ?travelers=initial:Name,initial:Name (append * for checked, ! for checked & hidden, e.g. G*:Greg)
@@ -43,10 +187,206 @@ Google Sheet format:
 - Trips (3 columns): date, initials, destinations
 
 Example URL:
-GPSTravelLog.html?travelers=G!:Greg,N!:Nastya&slider=0&minYear=2026&title=USA%20Roadtrip&id=ID_from_Sharing_Google_sheet`;for(let o=0,n=10;o<m.length;o+=n)alert(m.slice(o,o+n).join(`
-`));m.length=0,alert(t)}};function E(i){let e=null,a=h,t={},o="GPSTravelLog",n=!0,s=0,r=9999;for(let[l,c]of i)switch(l){case"id":e=T(c),a=h;break;case"path":e=c,a=d=>d.split("|");break;case"title":o=c;break;case"minYear":s=parseInt(c,10),isNaN(s)&&(s=0);break;case"maxYear":r=parseInt(c,10),isNaN(r)&&(r=9999);break;case"travelers":t=k(c);break;case"slider":n=!["false","0","no","off"].includes(c.toLowerCase().trim());break;default:u(!1,`WARN: unrecognized option in URL: ${l}`);break}return u(Object.keys(t).length>0,"ERROR: no travelers specified!"),u(e!=null,"ERROR: no gps data specified!"),{dataURL:e,lineParser:a,travelers:t,title:o,slider:n,minYear:s,maxYear:r}}async function N(i,e){let a={},t=[];console.log(`Fetching data from: ${i}`);try{let o=await fetch(i);if(!o.ok)throw new Error(`HTTP error! status: ${o.status}`);let n=await o.text();for(let s of n.split(`
-`))try{if(s.trim()){let r=e(s);for(;r.length>0&&r[r.length-1]==="";)r.pop();switch(r.length){case 0:continue;case 2:{let l=x(r);if(l!=null){a[l.dest]=l.location;continue}}break;case 3:{let l=R(r,p);if(l!=null){t.push(...l);continue}}break}u(!1,`ERROR: badly formatted GPS data line: ${s}`)}}catch(r){u(!1,`ERROR: puked parsing GPS data line: ${s} exception: ${r}`)}}catch(o){u(!1,`ERROR: puked trying to load GPS data; exception: ${o}`)}return{locations:a,trips:t}}function U(i,e){if(!u(g.length>0,"WARN: No trips loaded. Filters will not be initialized."))return;let a=[...new Set(g.map(r=>r.year))].sort((r,l)=>r-l),t=Math.max(a[0],i),o=Math.min(a[a.length-1],e),n=document.getElementById("year-slider");if(!n)return;n.noUiSlider&&n.noUiSlider.destroy(),noUiSlider.create(n,{start:[t,o],connect:!0,step:1,range:{min:t,max:o},tooltips:!0,format:{to:r=>Math.round(r),from:r=>Math.round(r)}}),n.noUiSlider.on("update",function(){y()});let s=document.getElementById("traveler-checkboxes");if(s){s.innerHTML="";for(let[r,l]of Object.entries(p)){let c=document.createElement("div");c.className="flex items-center";let d=document.createElement("input");d.type="checkbox",d.id=`traveler-${r}`,d.value=l.name,d.checked=l.checked,d.className="h-4 w-4 text-indigo-600 border-gray-300 rounded",c.appendChild(d);let f=document.createElement("label");d.addEventListener("change",()=>y()),f.htmlFor=`traveler-${r}`,f.textContent=l.name,f.className="ml-2 block text-sm text-gray-900",c.appendChild(f),s.appendChild(c)}}}function y(){for(let s of b)s.setMap(null);b=[];let i=document.getElementById("year-slider");if(!i||!i.noUiSlider)return;let[e,a]=i.noUiSlider.get(),t=[];document.querySelectorAll("#traveler-checkboxes input:checked").forEach(s=>{t.push(s.value)});let n=g.filter(s=>{let r=s.year,l=t.length===0?!1:t.every(c=>s.travelers.includes(c));return r>=e&&r<=a&&l});for(let s of n){let r=L[s.destination];if(r){let l=Array.from(s.initials).filter(d=>Object.prototype.hasOwnProperty.call(p,d)).join(""),c=new google.maps.Marker({position:r,map:S,title:`${s.date} ${l}`});b.push(c)}}}function v(i){let e=document.getElementById(i);e&&(e.style.display="none")}})();
-//# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsiVHJhdmVsTG9nTGliLnRzIiwgIkdQU1RyYXZlbExvZy50cyJdLAogICJtYXBwaW5ncyI6ICJtQkEwQk8sU0FBU0EsRUFBYUMsRUFBd0IsQ0FDbkQsSUFBTUMsRUFBbUIsQ0FBQyxFQUN0QkMsRUFBVSxHQUNWQyxFQUFXLEdBRWYsUUFBU0MsRUFBSSxFQUFHQSxFQUFJSixFQUFLLE9BQVFJLElBQUssQ0FDcEMsSUFBTUMsRUFBT0wsRUFBS0ksQ0FBQyxFQUNmQyxJQUFTLElBQ1BGLEdBQVlILEVBQUtJLEVBQUksQ0FBQyxJQUFNLEtBQzlCRixHQUFXLElBQ1hFLEtBRUFELEVBQVcsQ0FBQ0EsRUFFTEUsSUFBUyxLQUFPLENBQUNGLEdBQzFCRixFQUFPLEtBQUtDLEVBQVEsS0FBSyxDQUFDLEVBQzFCQSxFQUFVLElBRVZBLEdBQVdHLENBRWYsQ0FDQSxPQUFBSixFQUFPLEtBQUtDLEVBQVEsS0FBSyxDQUFDLEVBQ25CRCxDQUNULENBT08sU0FBU0ssRUFBZUMsRUFBNkMsQ0FDMUUsSUFBTUMsRUFBMEMsQ0FBQyxFQUVqRCxRQUFXQyxLQUFRRixFQUFNLE1BQU0sR0FBRyxFQUFHLENBQ25DLElBQU1HLEVBQVFELEVBQUssTUFBTSxHQUFHLEVBQ3hCRSxFQUFZLEdBRWhCLEdBQUlELEVBQU0sUUFBVSxFQUFHLENBQ3JCLElBQUlFLEVBQVVGLEVBQU0sQ0FBQyxFQUFFLEtBQUssRUFDdEJHLEVBQU9ILEVBQU0sQ0FBQyxFQUFFLEtBQUssRUFDckJJLEVBQVVGLEVBQVEsU0FBUyxHQUFHLEdBQUtBLEVBQVEsU0FBUyxHQUFHLEVBQ3ZERyxFQUFVLENBQUNILEVBQVEsU0FBUyxHQUFHLEdBRWhDRSxHQUFXRixFQUFRLFFBQVUsS0FDbkNFLElBQ0ZGLEVBQVVBLEVBQVEsTUFBTSxFQUFHLEVBQUUsR0FFMUJBLEVBQVEsUUFBVSxHQUFLQyxFQUFLLE9BQVMsSUFDakNMLEVBQVVJLENBQU8sRUFBSSxDQUFFLEtBQUFDLEVBQU0sUUFBQUMsRUFBUyxRQUFB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V0FBVyxJQUFJLEVBQy9DUSxFQUE4QixDQUFDLEVBQ2xCLFNBQVMsaUJBQzFCLG9DQUNGLEVBQ1csUUFBU0gsR0FBYSxDQUMvQkcsRUFBa0IsS0FBS0gsRUFBUyxLQUFLLENBQ3ZDLENBQUMsRUFFRCxJQUFNSSxFQUFnQm5ELEVBQU0sT0FBUXVDLEdBQVMsQ0FDM0MsSUFBTWEsRUFBV2IsRUFBSyxLQUNoQmMsRUFDSkgsRUFBa0IsU0FBVyxFQUMzQixHQUNBQSxFQUFrQixNQUFPSSxHQUFNZixFQUFLLFVBQVUsU0FBU2UsQ0FBQyxDQUFDLEVBRTdELE9BQU9GLEdBQVkvQixHQUFXK0IsR0FBWTlCLEdBQVcrQixDQUN2RCxDQUFDLEVBRUQsUUFBV2QsS0FBUVksRUFBZSxDQUNoQyxJQUFNSSxFQUFXeEQsRUFBVXdDLEVBQUssV0FBVyxFQUMzQyxHQUFJZ0IsRUFBVSxDQUNaLElBQU1DLEVBQWdCLE1BQU0sS0FBS2pCLEVBQUssUUFBUSxFQUMzQyxPQUFRekIsR0FBTSxPQUFPLFVBQVUsZUFBZSxLQUFLYixFQUFXYSxDQUFDLENBQUMsRUFDaEUsS0FBSyxFQUFFLEVBRUptQyxFQUFTLElBQUksT0FBTyxLQUFLLE9BQU8sQ0FDcEMsU0FBVU0sRUFDVixJQUFLMUQsRUFDTCxNQUFPLEdBQUcwQyxFQUFLLElBQUksSUFBSWlCLENBQWEsRUFDdEMsQ0FBQyxFQUNEMUQsRUFBUSxLQUFLbUQsQ0FBTSxDQUNyQixDQUNGLENBQ0YsQ0FFQSxTQUFTM0MsRUFBTW1ELEVBQWMsQ0FDM0IsSUFBTUMsRUFBVSxTQUFTLGVBQWdCRCxDQUFHLEVBRXZDQyxJQUNIQSxFQUFRLE1BQU0sUUFBVSxPQUM1QiIsCiAgIm5hbWVzIjogWyJwYXJzZUNTVkxpbmUiLCAibGluZSIsICJyZXN1bHQiLCAiY3VycmVudCIsICJpblF1b3RlcyIsICJpIiwgImNoYXIiLCAicGFyc2VUcmF2ZWxlcnMiLCAidmFsdWUiLCAidHJhdmVsZXJzIiwgInBhaXIiLCAicGFydHMiLCAic3VjY2VlZGVkIiwgImluaXRpYWwiLCAibmFtZSIsICJjaGVja2VkIiwgInZpc2libGUiLCAiY2hlY2siLCAicGFyc2VMb2NhdGlvbkxpbmUiLCAiZGVzdCIsICJjb29yZHMiLCAiY29vcmRQYXJ0cyIsICJsYXQiLCAibG5nIiwgInBhcnNlVHJpcExpbmUiLCAiZGF0ZSIsICJpbml0aWFscyIsICJkZXN0cyIsICJ5ZWFyIiwgImdldFRyYXZlbGVyTmFtZSIsICJ0cmlwVHJhdmVsZXJzIiwgImRlc3RBcnJheSIsICJ0cmlwcyIsICJkZXN0aW5hdGlvbiIsICJnc2hlZXRVUkwiLCAiaWQiLCAiZXJyb3JzIiwgImlzVmFsaWQiLCAibWVzc2FnZSIsICJtYXAiLCAibWFya2VycyIsICJsb2NhdGlvbnMiLCAidHJpcHMiLCAidHJhdmVsZXJzIiwgIm1hcEVsZW1lbnQiLCAicGFyYW1zIiwgInBhcnNlIiwgImhpZGRlbiIsICJoaWRlIiwgImgxIiwgImRhdGEiLCAibG9hZERhdGEiLCAiY3JlYXRlRmlsdGVycyIsICJ1cGRhdGVNYXAiLCAiZXJyb3JzIiwgIlVTQUdFIiwgImkiLCAiY2h1bmsiLCAiZGF0YVVSTCIsICJsaW5lUGFyc2VyIiwgInBhcnNlQ1NWTGluZSIsICJ0aXRsZSIsICJzbGlkZXIiLCAibWluWWVhciIsICJtYXhZZWFyIiwgImtleSIsICJ2YWx1ZSIsICJnc2hlZXRVUkwiLCAibGluZSIsICJwYXJzZVRyYXZlbGVycyIsICJjaGVjayIsICJyZXNwb25zZSIsICJwYXJ0cyIsICJyZXN1bHQiLCAicGFyc2VMb2NhdGlvbkxpbmUiLCAibmV3VHJpcHMiLCAicGFyc2VUcmlwTGluZSIsICJlIiwgIm1pblllYXIwIiwgIm1heFllYXIwIiwgInllYXJzIiwgInRyaXAiLCAiYSIsICJiIiwgInllYXJTbGlkZXIiLCAidHJhdmVsZXJDaGVja2JveGVzIiwgImluaXRpYWwiLCAiaW5mbyIsICJjaGVja2JveERpdiIsICJjaGVja2JveCIsICJsYWJlbCIsICJtYXJrZXIiLCAic2VsZWN0ZWRUcmF2ZWxlcnMiLCAiZmlsdGVyZWRUcmlwcyIsICJ0cmlwWWVhciIsICJ0cmlwTWF0Y2hlc1RyYXZlbGVycyIsICJ0IiwgImxvY2F0aW9uIiwgInZhbGlkSW5pdGlhbHMiLCAiaWQiLCAiZWxlbWVudCJdCn0K
+GPSTravelLog.html?travelers=G!:Greg,N!:Nastya&slider=0&minYear=2026&title=USA%20Roadtrip&id=ID_from_Sharing_Google_sheet`;
+      for (let i = 0, chunk = 10; i < errors.length; i += chunk)
+        alert(errors.slice(i, i + chunk).join("\n"));
+      errors.length = 0;
+      alert(USAGE);
+    }
+  };
+  function parse(params) {
+    let dataURL = null;
+    let lineParser = parseCSVLine;
+    let travelers2 = {};
+    let title = "GPSTravelLog";
+    let slider = true;
+    let minYear = 0;
+    let maxYear = 9999;
+    for (const [key, value] of params) {
+      switch (key) {
+        case "sheetID":
+          dataURL = gsheetURL(value);
+          lineParser = parseCSVLine;
+          break;
+        case "filename":
+          dataURL = value;
+          lineParser = (line) => line.split("|");
+          break;
+        case "txtID":
+          dataURL = gtxtURL(value);
+          lineParser = (line) => line.split("|");
+          break;
+        case "title":
+          title = value;
+          break;
+        case "minYear":
+          minYear = parseInt(value, 10);
+          if (isNaN(minYear))
+            minYear = 0;
+          break;
+        case "maxYear":
+          maxYear = parseInt(value, 10);
+          if (isNaN(maxYear))
+            maxYear = 9999;
+          break;
+        case "travelers":
+          travelers2 = parseTravelers(value);
+          break;
+        case "slider":
+          slider = !["false", "0", "no", "off"].includes(value.toLowerCase().trim());
+          break;
+        default:
+          check(false, `WARN: unrecognized option in URL: ${key}`);
+          break;
+      }
+    }
+    check(Object.keys(travelers2).length > 0, "ERROR: no travelers specified!");
+    check(dataURL != null, "ERROR: no gps data specified!");
+    return { dataURL, lineParser, travelers: travelers2, title, slider, minYear, maxYear };
+  }
+  async function loadData(dataURL, lineParser) {
+    const locations2 = {};
+    const trips2 = [];
+    alert(`Fetching data from: ${dataURL}`);
+    try {
+      const response = await fetch(dataURL);
+      if (!response.ok)
+        throw new Error(`HTTP error! status: ${response.status}`);
+      const data = await response.text();
+      for (const line of data.split("\n")) {
+        try {
+          if (line.trim()) {
+            const parts = lineParser(line);
+            while (parts.length > 0 && parts[parts.length - 1] === "")
+              parts.pop();
+            switch (parts.length) {
+              case 0:
+                continue;
+              case 2:
+                {
+                  const result = parseLocationLine(parts);
+                  if (result != null) {
+                    locations2[result.dest] = result.location;
+                    continue;
+                  }
+                }
+                break;
+              case 3:
+                {
+                  const newTrips = parseTripLine(parts, travelers);
+                  if (newTrips != null) {
+                    trips2.push(...newTrips);
+                    continue;
+                  }
+                }
+                break;
+            }
+            check(false, `ERROR: badly formatted GPS data line: ${line}`);
+          }
+        } catch (e) {
+          check(false, `ERROR: puked parsing GPS data line: ${line} exception: ${e}`);
+        }
+      }
+    } catch (e) {
+      check(false, `ERROR: puked trying to load GPS data; exception: ${e}`);
+    }
+    return { locations: locations2, trips: trips2 };
+  }
+  function createFilters(minYear0, maxYear0) {
+    if (!check(trips.length > 0, "WARN: No trips loaded. Filters will not be initialized."))
+      return;
+    const years = [...new Set(trips.map((trip) => trip.year))].sort(
+      (a, b) => a - b
+    );
+    const minYear = Math.max(years[0], minYear0);
+    const maxYear = Math.min(years[years.length - 1], maxYear0);
+    const yearSlider = document.getElementById("year-slider");
+    if (!yearSlider)
+      return;
+    if (yearSlider.noUiSlider) {
+      yearSlider.noUiSlider.destroy();
+    }
+    noUiSlider.create(yearSlider, {
+      start: [minYear, maxYear],
+      connect: true,
+      step: 1,
+      range: {
+        min: minYear,
+        max: maxYear
+      },
+      tooltips: true,
+      format: {
+        to: (value) => Math.round(value),
+        from: (value) => Math.round(value)
+      }
+    });
+    yearSlider.noUiSlider.on("update", function() {
+      updateMap();
+    });
+    const travelerCheckboxes = document.getElementById("traveler-checkboxes");
+    if (!travelerCheckboxes)
+      return;
+    travelerCheckboxes.innerHTML = "";
+    for (const [initial, info] of Object.entries(travelers)) {
+      const checkboxDiv = document.createElement("div");
+      checkboxDiv.className = "flex items-center";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.id = `traveler-${initial}`;
+      checkbox.value = info.name;
+      checkbox.checked = info.checked;
+      checkbox.className = "h-4 w-4 text-indigo-600 border-gray-300 rounded";
+      checkboxDiv.appendChild(checkbox);
+      const label = document.createElement("label");
+      checkbox.addEventListener("change", () => updateMap());
+      label.htmlFor = `traveler-${initial}`;
+      label.textContent = info.name;
+      label.className = "ml-2 block text-sm text-gray-900";
+      checkboxDiv.appendChild(label);
+      travelerCheckboxes.appendChild(checkboxDiv);
+    }
+  }
+  function updateMap() {
+    for (const marker of markers) {
+      marker.setMap(null);
+    }
+    markers = [];
+    const yearSlider = document.getElementById("year-slider");
+    if (!yearSlider || !yearSlider.noUiSlider)
+      return;
+    const [minYear, maxYear] = yearSlider.noUiSlider.get();
+    const selectedTravelers = [];
+    const checkboxes = document.querySelectorAll(
+      "#traveler-checkboxes input:checked"
+    );
+    checkboxes.forEach((checkbox) => {
+      selectedTravelers.push(checkbox.value);
+    });
+    const filteredTrips = trips.filter((trip) => {
+      const tripYear = trip.year;
+      const tripMatchesTravelers = selectedTravelers.length === 0 ? false : selectedTravelers.every((t) => trip.travelers.includes(t));
+      return tripYear >= minYear && tripYear <= maxYear && tripMatchesTravelers;
+    });
+    for (const trip of filteredTrips) {
+      const location = locations[trip.destination];
+      if (location) {
+        const validInitials = Array.from(trip.initials).filter((i) => Object.prototype.hasOwnProperty.call(travelers, i)).join("");
+        const marker = new google.maps.Marker({
+          position: location,
+          map,
+          title: `${trip.date} ${validInitials}`
+        });
+        markers.push(marker);
+      }
+    }
+  }
+  function hide(id) {
+    const element = document.getElementById(id);
+    if (element)
+      element.style.display = "none";
+  }
+})();
+//# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsiVHJhdmVsTG9nTGliLnRzIiwgIkdQU1RyYXZlbExvZy50cyJdLAogICJtYXBwaW5ncyI6ICI7OztBQTBCTyxXQUFTLGFBQWEsTUFBd0I7QUFDbkQsVUFBTSxTQUFtQixDQUFDO0FBQzFCLFFBQUksVUFBVTtBQUNkLFFBQUksV0FBVztBQUVmLGFBQVMsSUFBSSxHQUFHLElBQUksS0FBSyxRQUFRLEtBQUs7QUFDcEMsWUFBTSxPQUFPLEtBQUssQ0FBQztBQUNuQixVQUFJLFNBQVMsS0FBSztBQUNoQixZQUFJLFlBQVksS0FBSyxJQUFJLENBQUMsTUFBTSxLQUFLO0FBQ25DLHFCQUFXO0FBQ1g7QUFBQSxRQUNGLE9BQU87QUFDTCxxQkFBVyxDQUFDO0FBQUEsUUFDZDtBQUFBLE1BQ0YsV0FBVyxTQUFTLE9BQU8sQ0FBQyxVQUFVO0FBQ3BDLGVBQU8sS0FBSyxRQUFRLEtBQUssQ0FBQztBQUMxQixrQkFBVTtBQUFBLE1BQ1osT0FBTztBQUNMLG1CQUFXO0FBQUEsTUFDYjtBQUFBLElBQ0Y7QUFDQSxXQUFPLEtBQUssUUFBUSxLQUFLLENBQUM7QUFDMUIsV0FBTztBQUFBLEVBQ1Q7QUFPTyxXQUFTLGVBQWUsT0FBNkM7QUFDMUUsVUFBTUEsYUFBMEMsQ0FBQztBQUVqRCxlQUFXLFFBQVEsTUFBTSxNQUFNLEdBQUcsR0FBRztBQUNuQyxZQUFNLFFBQVEsS0FBSyxNQUFNLEdBQUc7QUFDNUIsVUFBSSxZQUFZO0FBRWhCLFVBQUksTUFBTSxVQUFVLEdBQUc7QUFDckIsWUFBSSxVQUFVLE1BQU0sQ0FBQyxFQUFFLEtBQUs7QUFDNUIsY0FBTSxPQUFPLE1BQU0sQ0FBQyxFQUFFLEtBQUs7QUFDM0IsY0FBTSxVQUFVLFFBQVEsU0FBUyxHQUFHLEtBQUssUUFBUSxTQUFTLEdBQUc7QUFDN0QsY0FBTSxVQUFVLENBQUMsUUFBUSxTQUFTLEdBQUc7QUFFckMsWUFBSyxXQUFXLFFBQVEsVUFBVSxHQUFJO0FBQzNDLGNBQUk7QUFDRixzQkFBVSxRQUFRLE1BQU0s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VyxVQUFVLEtBQUssV0FBVztBQUMzQyxVQUFJLFVBQVU7QUFDWixjQUFNLGdCQUFnQixNQUFNLEtBQUssS0FBSyxRQUFRLEVBQzNDLE9BQU8sQ0FBQyxNQUFNLE9BQU8sVUFBVSxlQUFlLEtBQUssV0FBVyxDQUFDLENBQUMsRUFDaEUsS0FBSyxFQUFFO0FBRVYsY0FBTSxTQUFTLElBQUksT0FBTyxLQUFLLE9BQU87QUFBQSxVQUNwQyxVQUFVO0FBQUEsVUFDVjtBQUFBLFVBQ0EsT0FBTyxHQUFHLEtBQUssSUFBSSxJQUFJLGFBQWE7QUFBQSxRQUN0QyxDQUFDO0FBQ0QsZ0JBQVEsS0FBSyxNQUFNO0FBQUEsTUFDckI7QUFBQSxJQUNGO0FBQUEsRUFDRjtBQUVBLFdBQVMsS0FBTSxJQUFjO0FBQzNCLFVBQU0sVUFBVSxTQUFTLGVBQWdCLEVBQUc7QUFFNUMsUUFBSztBQUNILGNBQVEsTUFBTSxVQUFVO0FBQUEsRUFDNUI7IiwKICAibmFtZXMiOiBbInRyYXZlbGVycyIsICJ0cmlwcyIsICJ0cmF2ZWxlcnMiLCAibG9jYXRpb25zIiwgInRyaXBzIl0KfQo=
   </script>
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBSV-1WUJrjTdy5tOs30yEIsCa2QPbqS58&callback=initMap" async defer></script>
 </body>
