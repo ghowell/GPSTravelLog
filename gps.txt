@@ -42,8 +42,8 @@
 20241022|GN|BlueSpringsParkFL
 202409|GraN|KeyWest
 202408|Gr|Seattle
-202406|GDnN|LakeOfOzarks Memphis Nashville HendronKY JonesboroAK
-202405|GanrND|Providence
+202406|GDnNC|LakeOfOzarks Memphis Nashville HendronKY JonesboroAK
+202405|GanrNDC|Providence
 202404|G|Nashville TellicoPlainsTN
 202403|GaN|CopperMtnCO
 20230927|GN|Charleston
@@ -59,7 +59,7 @@
 202010|G|BlueRidgePkwy SpartanburgSC BooneNC
 202008|Gra|CubaIslandNY
 202007|G|BarHarbor Caribou
-201907|GnraD|SanJuan PlayaJobos
+201907|GnraDC|SanJuan PlayaJobos
 201902|G|PonteVedra
 201812|G|PonteVedra
 201804|Gra|JacksonHole
