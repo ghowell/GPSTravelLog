@@ -81,7 +81,7 @@
 201711|G|HongKong
 201710|G|DelWaterGap|41.132029,-74.937489
 201709|G|Madrid
-201704|G|BahamasGeorgetown BahamasRumCay Turks&Caicos
+201704|GE|BahamasGeorgetown BahamasRumCay Turks&Caicos
 201703|Gn|Aruba|12.578513,-70.042679
 201608|G|Minsk
 201603|G|Minsk
@@ -126,7 +126,8 @@
 200901|GD|Alabama|32.318231,-86.902298
 200812|G|BahamasSpanishCay|26.928774,-77.529489
 200809|G|Rome Capri
-200807|GE|Prague Riga Vilnius Salacgriva Tallinn
+200807|G|Riga Vilnius Salacgriva Tallinn
+200807|GE|Prague
 200805|G|SaoPaolo|-23.550520,-46.633309
 200805|G|Bahamas
 200804|G|FallsDeIguacu|-25.690499,-54.437511
@@ -137,13 +138,14 @@
 200612|G|Cancun
 200611|G|Bermuda|32.307800,-64.750500
 200608|G|Turks&Caicos
-200607|GE|Halifax|53.727020,-1.857540
+200607|GE|Halifax|44.650700254094964, -63.59393065770621
 200605|G|NewOrleans
 200603|G|Minsk
 200601|G|London
 200504|Gmra|Disney
 200503|G|StMaarten Anguilla
-2004|GE|Oslo #+ small town on coast where Evan's boat was
+2004|GE|Oslo
+2004|GE|Sandefjord?|59.13207545797707, 10.21562225410926
 200312|G|GrandCayman
 2002|GE|Reykjavik
 2001|G|Acapulco|16.863611,-99.882500
