@@ -4,7 +4,7 @@ GPSTravelLog.html: ../../ts/bazel-out/k8-fastbuild/bin/apps/TravelLog/GPSTravelL
 	cp $< $@
 
 gps.txt: ../../../docs/personal/gps.txt
-	cp $< $@
+	cp -f $< $@
 
 install: all
 	git commit -m. -a
