@@ -1,6 +1,6 @@
 all: GPSTravelLog.html gps.txt
 
-GPSTravelLog.html: ../../ts/bazel-out/k8-fastbuild/bin/apps/TravelLog/GPSTravelLog.out.html
+GPSTravelLog.html: ../../ts/bazel-out/k8-dbg/bin/apps/TravelLog/GPSTravelLog.out.html
 	cp $< $@
 
 gps.txt: ../../../docs/personal/gps.txt
